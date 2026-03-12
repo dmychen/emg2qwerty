@@ -1,12 +1,12 @@
 # CNN-BiLSTM CTC Architecture
 
-## Motivation
+## Reasoning
 
-The TDS-Conv baseline has parameter-efficient temporal convolutions that provide a fixed receptive field (~1s / 125 frames), but they cannot model dependencies beyond that window. Bidirectional LSTMs offer unbounded temporal context by maintaining hidden states across the full sequence, which is advantageous for capturing the overlapping co-articulation patterns inherent in continuous typing (preparatory muscle activation precedes keystrokes by tens of ms, and relaxation trails after). Prior work on sEMG-to-text tasks reports that LSTM encoders with CTC outperform TDS-Conv baselines by ~10% absolute CER in zero-shot settings.
+The original TDS-Conv baseline has parameter-efficient temporal convolutions that provides a fixed receptive field, but it can't model any dependencies outside that window. Using a bidirectional LSTM gives us unbounded temporal context since we maintain hidden states across the full sequence. This is hopefully advantageous for representing overlapping co-articulation patterns that we get from continuous typing (as described in the emg2qwerty paper). Past work on sEMG-to-text tasks has shown that LSTM encoders with CTC outperform TDS-Conv baselines by ~10% absolute CER in zero-shot settings.
 
 ## Architecture
 
-The model reuses the existing preprocessing frontend (`SpectrogramNorm` + `MultiBandRotationInvariantMLP` + `Flatten`) and replaces `TDSConvEncoder` with a `CNNBiLSTMEncoder`.
+The model reuses the existing preprocessing (`SpectrogramNorm` + `MultiBandRotationInvariantMLP` + `Flatten`) and then instead of `TDSConvEncoder` replaces it with a `CNNBiLSTMEncoder`.
 
 ### Pipeline
 
@@ -79,7 +79,7 @@ This is ~1.3x the TDS-Conv baseline (5.3M). The LSTM dominates at 82% of paramet
 | `window_length` | 8000 (4s) |
 | `padding` | [1800, 200] |
 
-## Files Modified
+## Important Files
 
 - `emg2qwerty/modules.py` — added `CNNBiLSTMEncoder` class
 - `emg2qwerty/lightning.py` — added `BiLSTMCTCModule` class
@@ -87,7 +87,7 @@ This is ~1.3x the TDS-Conv baseline (5.3M). The LSTM dominates at 82% of paramet
 
 ## Running
 
-### CLI (local)
+### CLI
 
 ```bash
 python -m emg2qwerty.train \
@@ -99,7 +99,6 @@ python -m emg2qwerty.train \
 ### Colab
 
 ```python
-# In a Colab cell, after cloning the repo and installing dependencies:
 !pip install -e .
 
 # Training
@@ -119,7 +118,7 @@ python -m emg2qwerty.train \
   decoder=ctc_greedy
 ```
 
-### Hydra Config Override (full example)
+### Hydra Config
 
 ```bash
 python -m emg2qwerty.train \
