@@ -1,0 +1,12 @@
+# @package _global_
+module:
+  _target_: emg2qwerty.lightning.RNNCTCModule
+  in_features: 528  # freq * channels = (n_fft // 2 + 1) * 16
+  mlp_features: [384]
+  hidden_size: 256
+  num_layers: 3
+
+datamodule:
+  _target_: emg2qwerty.lightning.WindowedEMGDataModule
+  window_length: 8000  # 4 sec windows for 2kHz EMG
+  padding: [0, 0]  # RNNs do not need past/future context padding explicitly outside the window like convolutions might, but you can leave it if desired. Let's keep it 0 here.

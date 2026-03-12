@@ -1,0 +1,12 @@
+# @package _global_
+module:
+  _target_: emg2qwerty.lightning.TransformerCTCModule
+  in_features: 528
+  mlp_features: [384]
+  nhead: 8
+  num_layers: 4
+
+datamodule:
+  _target_: emg2qwerty.lightning.WindowedEMGDataModule
+  window_length: 8000
+  padding: [0, 0]  # don't need padding for transformers
