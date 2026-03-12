@@ -342,29 +342,42 @@ class TDSConvEncoder(nn.Module):
         return self.tds_conv_blocks(inputs)  # (T, N, num_features)
 
 class PositionalEncoding(nn.Module):
+    # gives the transformer a sense of time since it processes everything all at once
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
+        # compute the positional encodings once in log space
         position = torch.arange(max_len).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
         pe = torch.zeros(max_len, 1, d_model)
+        
+        # apply sin to even indices, cos to odd indices
         pe[:, 0, 0::2] = torch.sin(position * div_term)
         pe[:, 0, 1::2] = torch.cos(position * div_term)
+        
+        # register as a buffer so it doesn't get updated by the optimizer
         self.register_buffer("pe", pe)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # just add the pos encodings to the input features
         x = x + self.pe[:x.size(0)]
         return self.dropout(x)
 
 class TransformerEncoderModel(nn.Module):
+    # standard transformer encoder block that tries to find long term relationships
+    # across the entire 4 second typing window
     def __init__(self, num_features, nhead=8, num_layers=4, dim_feedforward=512, dropout=0.1):
         super().__init__()
+        # add the time stamps to the inputs
         self.pos_encoder = PositionalEncoding(num_features, dropout)
+        
+        # our main attention layers
         encoder_layer = nn.TransformerEncoderLayer(num_features, nhead, dim_feedforward, dropout)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers)
 
     def forward(self, src: torch.Tensor) -> torch.Tensor:
+        # src: (time, batch, features)
         out = self.pos_encoder(src)
         out = self.transformer_encoder(out)
         return out
