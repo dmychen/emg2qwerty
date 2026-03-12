@@ -169,6 +169,67 @@ class MultiBandRotationInvariantMLP(nn.Module):
         return torch.stack(outputs_per_band, dim=self.stack_dim)
 
 
+class CNNBiLSTMEncoder(nn.Module):
+    """A hybrid CNN-BiLSTM encoder that replaces the TDS convolutional encoder.
+
+    A shallow 1D CNN extracts local temporal features, followed by a deep
+    bidirectional LSTM that captures long-range co-articulation dynamics.
+    Uses stride=1, padding=1 convolutions to preserve temporal length.
+
+    Args:
+        in_features (int): Input feature dimension (e.g. 768 after MLP+flatten).
+        cnn_hidden_dim (int): Hidden dimension for CNN layers and LSTM input.
+        lstm_hidden_dim (int): Hidden size per LSTM direction.
+        lstm_layers (int): Number of stacked BiLSTM layers.
+        dropout (float): Dropout between LSTM layers.
+    """
+
+    def __init__(
+        self,
+        in_features: int,
+        cnn_hidden_dim: int = 256,
+        lstm_hidden_dim: int = 256,
+        lstm_layers: int = 4,
+        dropout: float = 0.3,
+    ) -> None:
+        super().__init__()
+
+        self.conv1 = nn.Conv1d(in_features, cnn_hidden_dim, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv1d(cnn_hidden_dim, cnn_hidden_dim, kernel_size=3, padding=1)
+        self.gelu = nn.GELU()
+        self.norm1 = nn.LayerNorm(cnn_hidden_dim)
+        self.norm2 = nn.LayerNorm(cnn_hidden_dim)
+
+        self.lstm = nn.LSTM(
+            input_size=cnn_hidden_dim,
+            hidden_size=lstm_hidden_dim,
+            num_layers=lstm_layers,
+            dropout=dropout if lstm_layers > 1 else 0.0,
+            bidirectional=True,
+            batch_first=False,
+        )
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        T, N, C = inputs.shape  # (T, N, features)
+
+        # Conv1d expects (N, C, T)
+        x = inputs.permute(1, 2, 0)
+        x = self.gelu(self.conv1(x))
+        x = x.permute(0, 2, 1)  # (N, T, C) for LayerNorm
+        x = self.norm1(x)
+        x = x.permute(0, 2, 1)  # (N, C, T) for Conv1d
+        x = self.gelu(self.conv2(x))
+        x = x.permute(0, 2, 1)
+        x = self.norm2(x)
+
+        # (N, T, C) -> (T, N, C) for LSTM
+        x = x.permute(1, 0, 2)
+
+        # BiLSTM: (T, N, cnn_hidden_dim) -> (T, N, 2*lstm_hidden_dim)
+        x, _ = self.lstm(x)
+        return x
+
+
 class TDSConv2dBlock(nn.Module):
     """A 2D temporal convolution block as per "Sequence-to-Sequence Speech
     Recognition with Time-Depth Separable Convolutions, Hannun et al"
