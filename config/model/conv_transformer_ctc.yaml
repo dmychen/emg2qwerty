@@ -3,11 +3,11 @@ module:
   _target_: emg2qwerty.lightning.ConvTransformerCTCModule
   in_features: 528
   mlp_features: [384]
-  cnn_hidden_dim: 256  # keep it mapping to 256 for parameter efficiency early
+  cnn_hidden_dim: 256  # Map down to 256
   nhead: 8
-  num_layers: 6   # deeper is better for attention resolving complex overlap
+  num_layers: 4   # Thinner transformer to converge faster
 
 datamodule:
   _target_: emg2qwerty.lightning.WindowedEMGDataModule
   window_length: 8000
-  padding: [0, 0]  # CNN with padding=1 keeps sequence length same, so no context padding is explicitly needed here.
+  padding: [0, 0]  # CNN with padding=1 keeps sequence length same

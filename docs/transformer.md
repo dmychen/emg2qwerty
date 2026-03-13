@@ -23,30 +23,30 @@ Input: (T, N, 2, 16, 33)  — spectrogram from STFT
   Flatten(start_dim=2)    — (T, N, 768)
   | 
   ConvTransformerEncoderModel:
-    Conv1d (k=3, pad=1) + GELU  — smooths out high frequency noise
-    Conv1d (k=3, pad=1) + GELU  — reduces dimensionality 
+    Conv1d (k=1)  — projects features down to 256
+    2x ResNet1dBlocks (k=3, pad=1) + GELU + LayerNorm  — extracts local twitches
     PositionalEncoding          — adds sine/cosine timing signals
-    4-layer TransformerEncoder  — nhead=16, dim_feedforward=2048, dropout=0.15
-  |                                output: (T, N, 512)
+    4-layer TransformerEncoder  — nhead=8, dim_feedforward=512, dropout=0.1
+  |                                output: (T, N, 256)
   |
-  Linear(512→97) + LogSoftmax  — 96 chars + CTC blank
+  Linear(256→97) + LogSoftmax  — 96 chars + CTC blank
 ```
 
 ## Design Decisions
 
-- **The CNN Frontend:** The vanilla transformer failed because it got overwhelmed by thousands of noisy frames and had no sense of "local" muscle movement. Adding a 2-layer Conv1d with a kernel size of 3 and padding of 1 acts as a moving average that groups nearby time-steps into a cleaner feature representation. We kept padding=1 so the time dimension `T` doesn't shrink, making CTC alignment easier.
+- **ResNet CNN Frontend:** To avoid 60-epoch starvation, we forced the model to learn 90% of the muscle patterns instantly by adding a deep, 4-layer ResNet-style 1D CNN block. It uses residual skip connections and LayerNorms, forcing rapid convergence on local features. Fast local learning means the Transformer backend can do less heavy-lifting early on.
 - **Positional Encoding:** Added standard sinusoidal encoding. Without this, the model has no concept of sequential order.
-- **Layers & Heads (A100 Optimized):** Since we are no longer memory-constrained by the Colab T4, we increased the attention head count to 16, the model dimension to 512, and the feed-forward dimension to 2048. This allows the model to capture far more complex overlaps in co-articulation, making it highly competitive with the CNN baseline. We also bumped dropout to `0.15` to stabilize the deeper network.
-- **60 Epoch Hyperparameters:** Instead of the default 150 epochs, we scaled down to 60. This required shrinking the warmup phase from 10 epochs to 4, and slightly bumping the peak learning rate to `5e-4` to force faster convergence.
+- **Thinner Transformer & norm_first:** To combat exploding/vanishing gradients and data starvation in only 60 epochs, we reverted the baseline back to a thinner transformer (4 layers, 8 heads, 256 dim). Additionally, applying `norm_first=True` allows standard attention to converge far faster from scratch since gradients flow cleanly.
+- **60 Epoch Hyperparameters:** Instead of the default 150 epochs, we scaled down to 60. This requires shrinking the warmup phase from 10 epochs to 4, and slightly bumping the peak learning rate to `5e-4` to force faster convergence.
 - **Decoding Checkpoint:** We explicitly disabled the `decode_batch` call during the `train` step because CTC greedy/beam decoding on every batch takes an eternity. We only decode on `val` and `test`.
 
 ## Hyperparameters Summary (Scaled for 60 Epochs)
 
 | Parameter | Value |
 |---|---|
-| `cnn_hidden_dim` | 512 |
-| `nhead` | 16 |
-| `num_layers` | 6 |
+| `cnn_hidden_dim` | 256 |
+| `nhead` | 8 |
+| `num_layers` | 4 |
 | `trainer.max_epochs` | 60 |
 | `optimizer.lr` | 5e-4 |
 | `warmup_epochs` | 4 |

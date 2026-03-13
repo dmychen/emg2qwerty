@@ -382,29 +382,71 @@ class TransformerEncoderModel(nn.Module):
         out = self.transformer_encoder(out)
         return out
 
+class ResNet1dBlock(nn.Module):
+    # a basic residual block to let us stack deeper CNNs without vanishing gradients
+    def __init__(self, channels):
+        super().__init__()
+        self.conv1 = nn.Conv1d(channels, channels, kernel_size=3, padding=1)
+        self.norm1 = nn.LayerNorm(channels)
+        self.gelu = nn.GELU()
+        
+        self.conv2 = nn.Conv1d(channels, channels, kernel_size=3, padding=1)
+        self.norm2 = nn.LayerNorm(channels)
+
+    def forward(self, x):
+        # x: (batch, channels, time)
+        res = x
+        
+        # LayerNorm requires (batch, time, channels) so we permute back and forth
+        x = x.permute(0, 2, 1)
+        x = self.norm1(x)
+        x = x.permute(0, 2, 1)
+        
+        x = self.gelu(self.conv1(x))
+        
+        x = x.permute(0, 2, 1)
+        x = self.norm2(x)
+        x = x.permute(0, 2, 1)
+        
+        x = self.conv2(x)
+        # skip connection! prevents the gradient starving we saw in the deeper model
+        return self.gelu(x + res)
+
 class ConvTransformerEncoderModel(nn.Module):
-    # Fixed the issue with vanilla transformers by adding a CNN frontend
-    # to extract local muscle twitches before asking attention to find long range patterns
-    def __init__(self, in_features, cnn_hidden_dim=512, nhead=16, num_layers=6, dim_feedforward=2048, dropout=0.15):
+    # Fast-Convergence Conv-Transformer hybrid
+    # Deeper ResNet-style CNN frontend to force fast local learning.
+    # Thinner transformer back-end to prevent 60-epoch data starvation.
+    def __init__(self, in_features, cnn_hidden_dim=256, nhead=8, num_layers=4, dim_feedforward=512, dropout=0.1):
         super().__init__()
         
-        # simple 2-layer CNN frontend with padding=1 so it doesn't change time length
-        self.conv1 = nn.Conv1d(in_features, cnn_hidden_dim, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv1d(cnn_hidden_dim, cnn_hidden_dim, kernel_size=3, padding=1)
-        self.gelu = nn.GELU()
+        # safely project whatever the input is down to our CNN dim
+        self.proj = nn.Conv1d(in_features, cnn_hidden_dim, kernel_size=1)
+        
+        # 4 layers of deep CNN (2 blocks * 2 convs) to learn fast
+        self.cnn_blocks = nn.Sequential(
+            ResNet1dBlock(cnn_hidden_dim),
+            ResNet1dBlock(cnn_hidden_dim)
+        )
         
         # positional encoding and transformer now run on the cnn's outputs
         self.pos_encoder = PositionalEncoding(cnn_hidden_dim, dropout)
-        encoder_layer = nn.TransformerEncoderLayer(cnn_hidden_dim, nhead, dim_feedforward, dropout)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers)
+        
+        # norm_first=True makes standard transformers converge WAY faster
+        encoder_layer = nn.TransformerEncoderLayer(
+            cnn_hidden_dim, nhead, dim_feedforward, dropout, norm_first=True
+        )
+        # final LayerNorm wraps up the encoder
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers, norm=nn.LayerNorm(cnn_hidden_dim)
+        )
 
     def forward(self, src: torch.Tensor) -> torch.Tensor:
         # src: (time, batch, features)
         
-        # cnn expects (batch, channels, time)
+        # CNN expects (batch, channels, time)
         x = src.permute(1, 2, 0)
-        x = self.gelu(self.conv1(x))
-        x = self.gelu(self.conv2(x))
+        x = self.proj(x)
+        x = self.cnn_blocks(x)
         
         # permute back to (time, batch, features) for transformer
         x = x.permute(2, 0, 1)
