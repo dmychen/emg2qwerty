@@ -27,6 +27,7 @@ from emg2qwerty.modules import (
     SpectrogramNorm,
     TDSConvEncoder,
     TransformerEncoderModel,
+    ConvTransformerEncoderModel,
 )
 from emg2qwerty.transforms import Transform
 
@@ -438,6 +439,118 @@ class TransformerCTCModule(pl.LightningModule):
         )
 
         # grab the null class from the charset for CTC blank
+        self.ctc_loss = nn.CTCLoss(blank=charset().null_class)
+        self.decoder = instantiate(decoder)
+
+        self.val_cer = CharacterErrorRates()
+        self.test_cer = CharacterErrorRates()
+
+    def forward(self, inputs):
+        return self.model(inputs)
+
+    def _step(self, phase, batch, *args, **kwargs):
+        inputs = batch["inputs"]
+        targets = batch["targets"]
+        input_lengths = batch["input_lengths"]
+        target_lengths = batch["target_lengths"]
+
+        # these are the log_probs from the model
+        emissions = self.forward(inputs)
+
+        loss = self.ctc_loss(
+            log_probs=emissions,
+            targets=targets.transpose(0, 1), # turn (time, batch) into (batch, time) 
+            input_lengths=input_lengths,
+            target_lengths=target_lengths,
+        )
+
+        # only decode for val and test to save time since it takes forever
+        if phase in ["val", "test"]:
+            preds = self.decoder.decode_batch(
+                emissions=emissions.detach().cpu().numpy(),
+                emission_lengths=input_lengths.detach().cpu().numpy(), 
+            )
+
+            metrics = self.val_cer if phase == "val" else self.test_cer
+            targets_numpy = targets.detach().cpu().numpy()
+            target_lengths_numpy = target_lengths.detach().cpu().numpy()
+            
+            for i in range(len(input_lengths)):
+                t = LabelData.from_labels(targets_numpy[: target_lengths_numpy[i], i])
+                metrics.update(prediction=preds[i], target=t)
+
+        self.log(f"{phase}/loss", loss, batch_size=len(input_lengths), sync_dist=True)
+        return loss
+
+    def training_step(self, batch, idx):
+        return self._step("train", batch)
+
+    def validation_step(self, batch, idx):
+        return self._step("val", batch)
+
+    def test_step(self, batch, idx):
+        return self._step("test", batch)
+
+    def on_validation_epoch_end(self):
+        self.log_dict({f"val/{k}": v for k, v in self.val_cer.compute().items()}, sync_dist=True)
+        self.val_cer.reset()
+
+    def on_test_epoch_end(self):
+        self.log_dict({f"test/{k}": v for k, v in self.test_cer.compute().items()}, sync_dist=True)
+        self.test_cer.reset()
+
+    def configure_optimizers(self):
+        return utils.instantiate_optimizer_and_scheduler(
+            self.parameters(),
+            optimizer_config=self.hparams.optimizer,
+            lr_scheduler_config=self.hparams.lr_scheduler,
+        )
+
+class ConvTransformerCTCModule(pl.LightningModule):
+    NUM_BANDS: ClassVar[int] = 2
+    ELECTRODE_CHANNELS: ClassVar[int] = 16
+
+    def __init__(
+        self,
+        in_features: int,
+        mlp_features: Sequence[int],
+        cnn_hidden_dim: int,
+        nhead: int,
+        num_layers: int,
+        optimizer: DictConfig,
+        lr_scheduler: DictConfig,
+        decoder: DictConfig,
+    ):
+        super().__init__()
+        self.save_hyperparameters()
+
+        # the input to the conv-transformer is going to be 768 (2 bands * 384 mlp output)
+        num_features = self.NUM_BANDS * mlp_features[-1]
+
+        self.model = nn.Sequential(
+            # normalize the raw 16 channels first
+            SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),
+            # combine into a 384-dim tensor per band (left and right wrist)
+            MultiBandRotationInvariantMLP(
+                in_features=in_features,
+                mlp_features=mlp_features,
+                num_bands=self.NUM_BANDS,
+            ),
+            nn.Flatten(start_dim=2),
+            
+            # Use our new CNN + Transformer fix
+            ConvTransformerEncoderModel(
+                in_features=num_features,
+                cnn_hidden_dim=cnn_hidden_dim, 
+                nhead=nhead, 
+                num_layers=num_layers
+            ),
+            
+            # project down from the CNN's output dimension to 97 classes
+            nn.Linear(cnn_hidden_dim, charset().num_classes),
+            nn.LogSoftmax(dim=-1),
+        )
+
         self.ctc_loss = nn.CTCLoss(blank=charset().null_class)
         self.decoder = instantiate(decoder)
 

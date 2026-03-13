@@ -381,3 +381,34 @@ class TransformerEncoderModel(nn.Module):
         out = self.pos_encoder(src)
         out = self.transformer_encoder(out)
         return out
+
+class ConvTransformerEncoderModel(nn.Module):
+    # Fixed the issue with vanilla transformers by adding a CNN frontend
+    # to extract local muscle twitches before asking attention to find long range patterns
+    def __init__(self, in_features, cnn_hidden_dim=256, nhead=8, num_layers=4, dim_feedforward=512, dropout=0.1):
+        super().__init__()
+        
+        # simple 2-layer CNN frontend with padding=1 so it doesn't change time length
+        self.conv1 = nn.Conv1d(in_features, cnn_hidden_dim, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv1d(cnn_hidden_dim, cnn_hidden_dim, kernel_size=3, padding=1)
+        self.gelu = nn.GELU()
+        
+        # positional encoding and transformer now run on the cnn's outputs
+        self.pos_encoder = PositionalEncoding(cnn_hidden_dim, dropout)
+        encoder_layer = nn.TransformerEncoderLayer(cnn_hidden_dim, nhead, dim_feedforward, dropout)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers)
+
+    def forward(self, src: torch.Tensor) -> torch.Tensor:
+        # src: (time, batch, features)
+        
+        # cnn expects (batch, channels, time)
+        x = src.permute(1, 2, 0)
+        x = self.gelu(self.conv1(x))
+        x = self.gelu(self.conv2(x))
+        
+        # permute back to (time, batch, features) for transformer
+        x = x.permute(2, 0, 1)
+        
+        out = self.pos_encoder(x)
+        out = self.transformer_encoder(out)
+        return out
