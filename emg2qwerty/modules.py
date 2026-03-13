@@ -343,7 +343,7 @@ class TDSConvEncoder(nn.Module):
 
 class PositionalEncoding(nn.Module):
     # gives the transformer a sense of time since it processes everything all at once
-    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
+    def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 200000):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
@@ -385,7 +385,7 @@ class TransformerEncoderModel(nn.Module):
 class ConvTransformerEncoderModel(nn.Module):
     # Fixed the issue with vanilla transformers by adding a CNN frontend
     # to extract local muscle twitches before asking attention to find long range patterns
-    def __init__(self, in_features, cnn_hidden_dim=256, nhead=8, num_layers=4, dim_feedforward=512, dropout=0.1):
+    def __init__(self, in_features, cnn_hidden_dim=512, nhead=16, num_layers=6, dim_feedforward=2048, dropout=0.15):
         super().__init__()
         
         # simple 2-layer CNN frontend with padding=1 so it doesn't change time length

@@ -3,9 +3,9 @@ module:
   _target_: emg2qwerty.lightning.ConvTransformerCTCModule
   in_features: 528
   mlp_features: [384]
-  cnn_hidden_dim: 256
+  cnn_hidden_dim: 256  # keep it mapping to 256 for parameter efficiency early
   nhead: 8
-  num_layers: 4
+  num_layers: 6   # deeper is better for attention resolving complex overlap
 
 datamodule:
   _target_: emg2qwerty.lightning.WindowedEMGDataModule
