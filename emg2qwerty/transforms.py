@@ -243,3 +243,52 @@ class SpecAugment:
 
         # (..., C, freq, T) -> (T, ..., C, freq)
         return x.movedim(-1, 0)
+
+
+@dataclass
+class DropElectrodeChannels:
+    """Zeros out a specified number of electrode channels to simulate fewer sensors.
+    Assumes input shape is (time, bands=2, channels=16).
+    """
+    
+    num_drop: int
+    randomize: bool = False
+
+    def __call__(self, tensor: torch.Tensor) -> torch.Tensor:
+        if self.num_drop <= 0:
+            return tensor
+            
+        x = tensor.clone()
+        num_channels = x.shape[-1]
+        
+        assert self.num_drop < num_channels, "Cannot drop all channels!"
+        
+        if self.randomize:
+            drop_indices = torch.randperm(num_channels)[:self.num_drop]
+        else:
+            drop_indices = torch.arange(num_channels - self.num_drop, num_channels)
+            
+        x[:, :, drop_indices] = 0.0
+        
+        return x
+
+
+@dataclass
+class SimulateLowSamplingRate:
+    """Simulates a lower sampling rate by decimating the signal and then 
+    repeating the samples (zero-order hold) back to the original sequence length.
+    
+    Args:
+        factor (int): The downsampling factor.
+    """
+    
+    factor: int
+
+    def __call__(self, tensor: torch.Tensor) -> torch.Tensor:
+        if self.factor <= 1:
+            return tensor
+            
+        decimated = tensor[::self.factor]
+        upsampled = decimated.repeat_interleave(self.factor, dim=0)
+        
+        return upsampled[:tensor.shape[0]]

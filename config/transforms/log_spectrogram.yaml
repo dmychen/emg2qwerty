@@ -25,9 +25,20 @@ specaug:
   n_freq_masks: 2
   freq_mask_param: 4
 
+drop_channels:
+  _target_: emg2qwerty.transforms.DropElectrodeChannels
+  num_drop: 0
+  randomize: False
+
+low_sample_rate:
+  _target_: emg2qwerty.transforms.SimulateLowSamplingRate
+  factor: 1
+
 transforms:
   train:
     - ${to_tensor}
+    - ${low_sample_rate}
+    - ${drop_channels}
     - ${band_rotation}
     - ${temporal_jitter}
     - ${logspec}
@@ -35,6 +46,8 @@ transforms:
 
   val:
     - ${to_tensor}
+    - ${low_sample_rate}
+    - ${drop_channels}
     - ${logspec}
 
   test: ${transforms.val}
