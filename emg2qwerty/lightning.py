@@ -417,28 +417,21 @@ class TransformerCTCModule(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
-        # the input to the transformer is going to be 768 (2 bands * 384 mlp output)
         num_features = self.NUM_BANDS * mlp_features[-1]
 
         self.model = nn.Sequential(
-            # normalize the raw 16 channels first
             SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),
-            # combine into a 384-dim tensor per band (left and right wrist)
             MultiBandRotationInvariantMLP(
                 in_features=in_features,
                 mlp_features=mlp_features,
                 num_bands=self.NUM_BANDS,
             ),
             nn.Flatten(start_dim=2),
-            # feed it into our custom transformer from modules.py
             TransformerEncoderModel(num_features, nhead=nhead, num_layers=num_layers),
-            # project down to 97 classes (96 characters + 1 CTC blank space)
             nn.Linear(num_features, charset().num_classes),
-            # log softmax because that's what CTC loss needs
             nn.LogSoftmax(dim=-1),
         )
 
-        # grab the null class from the charset for CTC blank
         self.ctc_loss = nn.CTCLoss(blank=charset().null_class)
         self.decoder = instantiate(decoder)
 
@@ -454,17 +447,15 @@ class TransformerCTCModule(pl.LightningModule):
         input_lengths = batch["input_lengths"]
         target_lengths = batch["target_lengths"]
 
-        # these are the log_probs from the model
         emissions = self.forward(inputs)
 
         loss = self.ctc_loss(
             log_probs=emissions,
-            targets=targets.transpose(0, 1), # turn (time, batch) into (batch, time) 
+            targets=targets.transpose(0, 1),
             input_lengths=input_lengths,
             target_lengths=target_lengths,
         )
 
-        # only decode for val and test to save time since it takes forever
         if phase in ["val", "test"]:
             preds = self.decoder.decode_batch(
                 emissions=emissions.detach().cpu().numpy(),
@@ -524,29 +515,22 @@ class ConvTransformerCTCModule(pl.LightningModule):
         super().__init__()
         self.save_hyperparameters()
 
-        # the input to the conv-transformer is going to be 768 (2 bands * 384 mlp output)
         num_features = self.NUM_BANDS * mlp_features[-1]
 
         self.model = nn.Sequential(
-            # normalize the raw 16 channels first
             SpectrogramNorm(channels=self.NUM_BANDS * self.ELECTRODE_CHANNELS),
-            # combine into a 384-dim tensor per band (left and right wrist)
             MultiBandRotationInvariantMLP(
                 in_features=in_features,
                 mlp_features=mlp_features,
                 num_bands=self.NUM_BANDS,
             ),
             nn.Flatten(start_dim=2),
-            
-            # Use our new CNN + Transformer fix
             ConvTransformerEncoderModel(
                 in_features=num_features,
                 cnn_hidden_dim=cnn_hidden_dim, 
                 nhead=nhead, 
                 num_layers=num_layers
             ),
-            
-            # project down from the CNN's output dimension to 97 classes
             nn.Linear(cnn_hidden_dim, charset().num_classes),
             nn.LogSoftmax(dim=-1),
         )
@@ -566,17 +550,15 @@ class ConvTransformerCTCModule(pl.LightningModule):
         input_lengths = batch["input_lengths"]
         target_lengths = batch["target_lengths"]
 
-        # these are the log_probs from the model
         emissions = self.forward(inputs)
 
         loss = self.ctc_loss(
             log_probs=emissions,
-            targets=targets.transpose(0, 1), # turn (time, batch) into (batch, time) 
+            targets=targets.transpose(0, 1),
             input_lengths=input_lengths,
             target_lengths=target_lengths,
         )
 
-        # only decode for val and test to save time since it takes forever
         if phase in ["val", "test"]:
             preds = self.decoder.decode_batch(
                 emissions=emissions.detach().cpu().numpy(),

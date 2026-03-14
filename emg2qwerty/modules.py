@@ -342,48 +342,40 @@ class TDSConvEncoder(nn.Module):
         return self.tds_conv_blocks(inputs)  # (T, N, num_features)
 
 class PositionalEncoding(nn.Module):
-    # gives the transformer a sense of time since it processes everything all at once
+    """Injects some information about the relative or absolute position of the tokens in the sequence."""
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 200000):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
 
-        # compute the positional encodings once in log space
         position = torch.arange(max_len).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
         pe = torch.zeros(max_len, 1, d_model)
         
-        # apply sin to even indices, cos to odd indices
         pe[:, 0, 0::2] = torch.sin(position * div_term)
         pe[:, 0, 1::2] = torch.cos(position * div_term)
         
-        # register as a buffer so it doesn't get updated by the optimizer
         self.register_buffer("pe", pe)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # just add the pos encodings to the input features
         x = x + self.pe[:x.size(0)]
         return self.dropout(x)
 
 class TransformerEncoderModel(nn.Module):
-    # standard transformer encoder block that tries to find long term relationships
-    # across the entire 4 second typing window
+    """Transformer encoder module for sequence processing."""
     def __init__(self, num_features, nhead=8, num_layers=4, dim_feedforward=512, dropout=0.1):
         super().__init__()
-        # add the time stamps to the inputs
         self.pos_encoder = PositionalEncoding(num_features, dropout)
         
-        # our main attention layers
         encoder_layer = nn.TransformerEncoderLayer(num_features, nhead, dim_feedforward, dropout)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers)
 
     def forward(self, src: torch.Tensor) -> torch.Tensor:
-        # src: (time, batch, features)
         out = self.pos_encoder(src)
         out = self.transformer_encoder(out)
         return out
 
 class ResNet1dBlock(nn.Module):
-    # a basic residual block to let us stack deeper CNNs without vanishing gradients
+    """1D ResNet block."""
     def __init__(self, channels):
         super().__init__()
         self.conv1 = nn.Conv1d(channels, channels, kernel_size=3, padding=1)
@@ -394,10 +386,8 @@ class ResNet1dBlock(nn.Module):
         self.norm2 = nn.LayerNorm(channels)
 
     def forward(self, x):
-        # x: (batch, channels, time)
         res = x
         
-        # LayerNorm requires (batch, time, channels) so we permute back and forth
         x = x.permute(0, 2, 1)
         x = self.norm1(x)
         x = x.permute(0, 2, 1)
@@ -409,46 +399,34 @@ class ResNet1dBlock(nn.Module):
         x = x.permute(0, 2, 1)
         
         x = self.conv2(x)
-        # skip connection! prevents the gradient starving we saw in the deeper model
         return self.gelu(x + res)
 
 class ConvTransformerEncoderModel(nn.Module):
-    # Fast-Convergence Conv-Transformer hybrid
-    # Deeper ResNet-style CNN frontend to force fast local learning.
-    # Thinner transformer back-end to prevent 60-epoch data starvation.
+    """Hybrid CNN-Transformer encoder."""
     def __init__(self, in_features, cnn_hidden_dim=256, nhead=8, num_layers=4, dim_feedforward=512, dropout=0.1):
         super().__init__()
         
-        # safely project whatever the input is down to our CNN dim
         self.proj = nn.Conv1d(in_features, cnn_hidden_dim, kernel_size=1)
         
-        # 4 layers of deep CNN (2 blocks * 2 convs) to learn fast
         self.cnn_blocks = nn.Sequential(
             ResNet1dBlock(cnn_hidden_dim),
             ResNet1dBlock(cnn_hidden_dim)
         )
         
-        # positional encoding and transformer now run on the cnn's outputs
         self.pos_encoder = PositionalEncoding(cnn_hidden_dim, dropout)
         
-        # norm_first=True makes standard transformers converge WAY faster
         encoder_layer = nn.TransformerEncoderLayer(
             cnn_hidden_dim, nhead, dim_feedforward, dropout, norm_first=True
         )
-        # final LayerNorm wraps up the encoder
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layer, num_layers, norm=nn.LayerNorm(cnn_hidden_dim)
         )
 
     def forward(self, src: torch.Tensor) -> torch.Tensor:
-        # src: (time, batch, features)
-        
-        # CNN expects (batch, channels, time)
         x = src.permute(1, 2, 0)
         x = self.proj(x)
         x = self.cnn_blocks(x)
         
-        # permute back to (time, batch, features) for transformer
         x = x.permute(2, 0, 1)
         
         out = self.pos_encoder(x)
